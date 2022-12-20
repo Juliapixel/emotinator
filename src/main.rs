@@ -1,11 +1,11 @@
-use std::time::Instant;
+use std::{time::{Instant}, sync::{Arc, Mutex}};
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 struct Logs {
     messages: Vec<Message>
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 struct Message {
     text: String
 }
@@ -44,6 +44,47 @@ fn channel_logs(channel: &String) -> Logs {
     return logs;
 }
 
+fn channel_logs_mt(channel: &String) -> Logs {
+    let start = Instant::now();
+    let logs = Arc::new(Mutex::new(Logs { messages: Vec::new() }));
+
+    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    for i in 1..=31 {
+        let channel_name = channel.clone();
+        let logs_local = logs.clone();
+        handles.push(
+            std::thread::spawn(move || {
+                for _ in 0..3 {
+                    let daily = reqwest::blocking::Client::builder().timeout(None).build().unwrap().get(
+                        format!("https://logs.ivr.fi/channel/{}/2022/11/{}?json", channel_name, i)
+                    );
+                    match daily.send() {
+                        Ok(req) => { match serde_json::from_str::<Logs>(&req.text().unwrap()) {
+                            Ok(msgs) => {
+                                logs_local.lock().unwrap().messages.extend(msgs.messages);
+                                break;
+                            },
+                            Err(e) => {
+                                println!("failed parsing json for day {}: {}", i, e);
+                                std::thread::sleep(std::time::Duration::from_secs(15));
+                            },
+                        }},
+                        Err(e) => {
+                            println!("failed requesting json for day {}: {}", i, e);
+                            std::thread::sleep(std::time::Duration::from_secs(15));
+                        },
+                    }
+                }
+            })
+        );
+    }
+
+    handles.into_iter().for_each(|h| h.join().unwrap());
+
+    println!("ivr log query took {}ms", start.elapsed().as_millis());
+    return Arc::try_unwrap(logs).unwrap().into_inner().unwrap();
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let channel = args.get(1).expect("no channel given");
@@ -51,7 +92,7 @@ fn main() {
 
     let logs = match username {
         Some(un) => personal_logs(channel, un),
-        None => channel_logs(channel),
+        None => channel_logs_mt(channel),
     };
 
     let start = Instant::now();
