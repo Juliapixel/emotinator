@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 #[derive(serde::Deserialize)]
 struct Logs {
     messages: Vec<Message>
@@ -16,23 +18,53 @@ struct Emote {
     name: String
 }
 
+fn personal_logs(channel: &String, username: &String) -> Logs {
+    let start = Instant::now();
+    let logs: Logs = reqwest::blocking::get(
+        format!("https://logs.ivr.fi/channel/{}/user/{}?json", channel, username)
+    ).unwrap().json().unwrap();
+    println!("ivr log query took {}ms", start.elapsed().as_millis());
+    return logs;
+}
+
+fn channel_logs(channel: &String) -> Logs {
+    let start = Instant::now();
+    let mut logs = Logs { messages: Vec::new() };
+    for i in 0..31 {
+        let daily = reqwest::blocking::get(
+            format!("https://logs.ivr.fi/channel/{}/2022/12/{}?json", channel, i)
+        );
+        if let Ok(req) = daily {
+            if let Ok(msgs) = req.json::<Logs>() {
+                logs.messages.extend(msgs.messages);
+            }
+        }
+    }
+    println!("ivr log query took {}ms", start.elapsed().as_millis());
+    return logs;
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let channel = args.get(1).expect("no channel given");
-    let username = args.get(2).expect("no username given");
+    let username = args.get(2);
 
-    let logs: Logs = reqwest::blocking::get(
-        format!("https://logs.ivr.fi/channel/{}/user/{}?json", channel, username)
-    ).unwrap().json().unwrap();
+    let logs = match username {
+        Some(un) => personal_logs(channel, un),
+        None => channel_logs(channel),
+    };
 
+    let start = Instant::now();
     let seventv_channel_emotes: SevenTVResponse = reqwest::blocking::get(
         format!("https://api.7tv.app/v2/users/{}/emotes", channel)
     ).unwrap().json().unwrap();
+    println!("7TV channel emote query took {}ms", start.elapsed().as_millis());
 
+    let start = Instant::now();
     let seventv_global_emotes: SevenTVResponse = reqwest::blocking::get(
         "https://api.7tv.app/v2/emotes/global"
     ).unwrap().json().unwrap();
+    println!("7TV global emote query took {}ms\n", start.elapsed().as_millis());
 
     let mut emotes: Vec<String> = Vec::new();
 
@@ -64,10 +96,10 @@ fn main() {
 
     sorted.sort_by_key(|v| v.1);
 
-    for i in 0..10 {
+    for i in 0..25 {
         if let Some(index) = sorted.len().checked_sub(1 + i) {
             if let Some(item) = sorted.get(index) {
-                println!("{} was said {} times", item.0, item.1);
+                println!("{} was used {} times", item.0, item.1);
             } else {
                 break;
             }
