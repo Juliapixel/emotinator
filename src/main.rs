@@ -1,4 +1,4 @@
-use std::{time::{Instant}, sync::{Arc, Mutex}, ops::Sub};
+use std::{time::{Instant}, sync::{Arc, Mutex}};
 
 #[derive(serde::Deserialize, Debug)]
 struct Logs {
@@ -95,6 +95,7 @@ fn channel_logs_mt(channel: &String) -> Logs {
     return Arc::try_unwrap(logs).unwrap().into_inner().unwrap();
 }
 
+#[allow(dead_code)]
 fn top_chatter(channel: &String, len: usize) {
     let start = Instant::now();
 
