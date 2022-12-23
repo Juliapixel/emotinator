@@ -1,5 +1,7 @@
 use std::{time::{Instant}, sync::{Arc, Mutex}};
 
+use chrono::Datelike;
+
 #[derive(serde::Deserialize, Debug)]
 struct Logs {
     messages: Vec<Message>
@@ -40,7 +42,11 @@ fn personal_logs(channel: &String, username: &String) -> Logs {
 fn channel_logs(channel: &String) -> Logs {
     let start = Instant::now();
     let mut logs = Logs { messages: Vec::new() };
-    for i in 0..31 {
+
+    let date = chrono::Utc::now();
+
+
+    for i in 1..=date.day() {
         let daily = reqwest::blocking::get(
             format!("https://logs.ivr.fi/channel/{}/2022/12/{}?json", channel, i)
         );
@@ -58,15 +64,19 @@ fn channel_logs_mt(channel: &String) -> Logs {
     let start = Instant::now();
     let logs = Arc::new(Mutex::new(Logs { messages: Vec::new() }));
 
+    let date = chrono::Utc::now();
+    let month = date.month();
+
+
     let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
-    for i in 1..=31 {
+    for i in 1..=date.day() {
         let channel_name = channel.clone();
         let logs_local = logs.clone();
         handles.push(
             std::thread::spawn(move || {
                 for _ in 0..5 {
                     let daily = reqwest::blocking::Client::builder().timeout(None).build().unwrap().get(
-                        format!("https://logs.ivr.fi/channel/{}/2022/12/{}?json", channel_name, i)
+                        format!("https://logs.ivr.fi/channel/{}/2022/{}/{}?json", channel_name, month, i)
                     );
                     match daily.send() {
                         Ok(req) => { match serde_json::from_str::<Logs>(&req.text().unwrap()) {
@@ -99,15 +109,14 @@ fn channel_logs_mt(channel: &String) -> Logs {
 fn top_chatter(channel: &String, len: usize) {
     let start = Instant::now();
 
-    let mut date = time::OffsetDateTime::from(std::time::SystemTime::now());
-    date = date.saturating_sub(time::Duration::days(1));
+    let date = chrono::Utc::now() - chrono::Duration::days(1);
 
     let daily = reqwest::blocking::Client::builder()
         .timeout(None)
         .build()
         .unwrap()
         .get(
-            format!("https://logs.ivr.fi/channel/{}/{}/{}/{}?json=", channel, date.year(), date.month() as u8, date.day())
+            format!("https://logs.ivr.fi/channel/{}/{}?json=", channel, date.format("%Y/%m/%d"))
         );
 
     let logs = match daily.send() {
@@ -159,15 +168,15 @@ fn top_chatter(channel: &String, len: usize) {
 fn top_past_24h(channel: &String, len: usize) {
     let start = Instant::now();
 
-    let date = time::OffsetDateTime::from(std::time::SystemTime::now());
-    let yesterdate = date.saturating_sub(time::Duration::days(1));
+    let date = chrono::Utc::now();
+    let yesterdate = date - chrono::Duration::days(1);
 
     let today = reqwest::blocking::Client::builder()
         .timeout(None)
         .build()
         .unwrap()
         .get(
-            format!("https://logs.ivr.fi/channel/{}/{}/{}/{}?json=", channel, date.year(), date.month() as u8, date.day())
+            format!("https://logs.ivr.fi/channel/{}/{}?json=", channel, date.format("%Y/%m/%d"))
         );
 
     let yesterday = reqwest::blocking::Client::builder()
@@ -175,11 +184,12 @@ fn top_past_24h(channel: &String, len: usize) {
         .build()
         .unwrap()
         .get(
-            format!("https://logs.ivr.fi/channel/{}/{}/{}/{}?json=", channel, yesterdate.year(), yesterdate.month() as u8, yesterdate.day())
+            format!("https://logs.ivr.fi/channel/{}/{}?json=", channel, yesterdate.format("%Y/%m/%d"))
         );
 
     let today_logs = match today.send() {
         Ok(req) => {
+            #[cfg(debug_assertions)]
             println!("sending request for: {}", req.url());
             // let headers = req.headers();
             // for i in headers.iter() {
@@ -199,6 +209,7 @@ fn top_past_24h(channel: &String, len: usize) {
 
     let yesterday_logs = match yesterday.send() {
         Ok(req) => {
+            #[cfg(debug_assertions)]
             println!("sending request for: {}", req.url());
             // let headers = req.headers();
             // for i in headers.iter() {
@@ -216,6 +227,7 @@ fn top_past_24h(channel: &String, len: usize) {
         }},
         Err(e) => panic!("failed requesting json for day {}: {}", date.day(), e),
     };
+    #[cfg(debug_assertions)]
     println!("ivr log queries took {}ms\n", start.elapsed().as_millis());
 
     let mut counter: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
@@ -228,9 +240,8 @@ fn top_past_24h(channel: &String, len: usize) {
     }
 
     for i in yesterday_logs.messages {
-        let timestamp = i.tags.tmi_sent_ts.parse::<u64>().unwrap();
-        let msg_date = time::OffsetDateTime::from(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(timestamp));
-        if yesterdate < msg_date {
+        let timestamp = i.tags.tmi_sent_ts.parse::<i64>().unwrap();
+        if yesterdate.timestamp_millis() < timestamp {
             match counter.get_mut(&i.displayName) {
                 Some(count) => *count += 1,
                 None => {counter.insert(i.displayName, 1);},
